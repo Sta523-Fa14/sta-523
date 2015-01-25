@@ -1,0 +1,112 @@
+---
+title: "HW2"
+output: html_document
+---
+
+
+###1 Scraping & Parsing Data\
+
+####La Quinta\
+
+The La Quinta Inns and Suites data is available in multiple pages of its website. This called for a two phased download of the data. Initially we download the list of all Inns and in the second phase, we download the specific webpage corresponding to each La Quinta Inn. In the parsing stage, we leveraged the support of SelectorGadget to choose the CSS component names of the information blocks, which we want for further analysis. However, the tool Selector Gadget is not helpful to find the component name of google map available in the webpage. It is here we resorted to reading the latitude and longitude using the conventional web scraping method. We realized that the list of Inns has duplicate records, which we avoided by applying unique function on the resultant data set. Please note that we have also scraped additional data such as number of floors, rooms, and suites. Wherever the data is not available for these columns, we marked them as NA. This may lead to a few coercion warning messages. Since we know what is causing them, we do not have to worry. 
+
+
+####Denny's\
+
+As to Denny's data, we scraped the data from the Where2GetIt page source using Firebug. We noticed a pattern in the url that we just need to change the state name in the url to scrape data state by state. In this way, we would not miss anyone hotel in the US. We created a vector of strings that contains all the states abbreviations, so that we can run a for loop to download all the data. After downloading all data, we used some functions in XML package to parse the data and then test whether address2 is meaningful or not by checking the length of each Denny's address2.
+
+
+```{r}
+#Setup
+source("check_packages.R")
+check_packages(c("graphics","geosphere"))
+
+#Load Data
+
+load("LaQuinta/Inns_Pages/La_Quinta_Inns_Data.Rdata")
+
+load("dennys/dennys_data.Rdata")
+
+```
+
+After successfully downloading and parsing both La Quinta's and Denny's data from their websites, we can now conduct our distance analysis based on these two datasets.
+
+The first thing we needed to do is to compute the distance matrix. Here, we used a R package called "geosphere", which implements spherical trigonometry functions for geographical applications, since we are working with longitude and latitude. The specific function that we used is called distVincentyEllipsoid. This function returns the shortest distance between two points according to the Vincenty(ellipsoid) method, which is more accurate than other great-circled methods, but is also more computationally intensive. It takes about 15 minutes to compute the distance matrix, and the final results are in kilometers. After that, we stored the minimum value of each row in a vector.
+
+
+###2 Distance Calculation\
+
+```{r}
+library(geosphere)
+m=dim(La_Quinta_Inns_data)[1]
+n=dim(dennys)[1]
+lon1=as.double(La_Quinta_Inns_data[,7])
+lat1=as.double(La_Quinta_Inns_data[,6])
+lon2=dennys$longitude
+lat2=dennys$latitude
+distance=matrix(NA,m,n)
+for (i in 1:m){
+  for (j in 1:n){
+    d=distVincentyEllipsoid(c(lon1[i],lat1[i]),c(lon2[j],lat2[j]))
+    distance[i,j]=d/1000
+  }
+}
+min.dist=apply(distance,1,min)
+```
+
+We plotted all the minimum values, which are distances of the closest Denny's to each La Quinta using a histogram, and on top of the histogram, we created a density plot to show the density of distances.
+
+###3 Density Plot\
+
+```{r}
+hist(min.dist,freq=FALSE, breaks=40, ylim=c(0,0.07),col="light blue",
+     main="Density plot of the min. distance between \n La Quinta Inns and Denny's restaurants across the US",xlab="Minimum distance (km)")
+lines(density(min.dist,from=0),col="blue",lwd=2)
+```
+
+From the previous plot, we discovered that most of the minimum values lie between 0 to 10km. We wanted to take a closer look at this interval, so we created another histogram that includes only the pairs that are within 10km to each other, and another density plot. This plot, again shows that majority of the minimum values lie between 0 to 1km.
+
+```{r}
+hist(min.dist[min.dist<10],freq=FALSE, breaks=seq(0,10,1),col="light blue",
+     main="Density plot of Denny's and La Quinta \n that are within 10km radius to each other",
+     xlab="Distance (km)")
+lines(density(min.dist[min.dist<10],from=0),col="blue",lwd=2)
+```
+
+Then we calculated the percentage of La Quinta-Denny's combos among all the La Quintas based on different definitions of "closeness"", ranging from 1km to 0.1km. The results are similar to the blog post of John Reiser.
+
+###4 Highlights\
+
+```{r}
+print(paste("The percentage of La Quinta-Denny's pairs that are within 1km is",length(min.dist[min.dist<1])*100/m,"%"))
+print(paste("The percentage of La Quinta-Denny's pairs that are within 500m is",length(min.dist[min.dist<0.5])*100/m,"%"))
+print(paste("The percentage of La Quinta-Denny's pairs that are within 100m is",length(min.dist[min.dist<0.1])*100/m,"%"))
+```
+
+In order to provide a more direct visualization of the locations of all the combos, We first got the indices of La Quintas and Denny's that are within 1km to each other. Then, we used the rgdal package to draw a map of the US. The code we used here are directly sourced from lecture sildes of Oct.1st, and can only be implemented on saxon.
+
+###5 Geo Plot\
+
+```{r}
+mat=NULL
+min.index=apply(distance,1,which.min)
+for (i in 1:m){
+  if (min.dist[i]<1){mat=rbind(mat,c(i,min.index[i]))}
+}
+library(rgdal)
+states = readOGR("/home/vis/cr173/Sta523/data/us-atlas/shp/us/","states-unfiltered", stringsAsFactors=FALSE)
+states = states[!duplicated(states$STATE),]
+plot(states[states$ORDER_ADM %in% 1:48,], col="lightgrey", axes=TRUE, xlab="Longitude",
+     ylab="Latitude", main="Pairs of Denny's and La Quinta on the US Map")
+points(lon1[mat[,1]],lat1[mat[,1]],col="red",pch=16)
+points(lon2[mat[,2]],lat2[mat[,2]],col="blue",pch=4)
+legend("bottomright", c("La Quinta", "Denny's"), col=c("red","blue"), pch=c(16,4))
+```
+
+We plotted all the La Quinta-Denny's combos on the map, with red dots representing La Quinta and blue crosses representing Denny's. From the plot, we see that the states with the most combos are California, Texas and Florida.
+
+###6 Conclusion\
+
+Based on our distance analysis, about 20 percent of the La Quinta hotels have a Denny's within 1km to them. Most of these pairs are located in California, Texas and Florida. These are also the states with the most number of Denny's restaurants and La Quinta hotels, so it's not surprising that they have the most pairs. Geographically, these three states are all in the south, and have more Hispanics or Spanish-speaking population. However, if the observation made by Mitch Hedberg is more concentrated on La Quinta and Denny's that are literally next to each other, then as we decrease the radius from 1km to 0.1km, the percentage also decreases significantly. Only about 3 percent of La Quinta hotels can be considered as right next to a Denny's. So, it seems that his claim is not supported by our analysis.
+
+

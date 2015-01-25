@@ -1,0 +1,266 @@
+---
+title: "Homework1"
+output: html_document
+---
+
+###1. Parse\
+
+####1.1 Load data\
+
+We load the data in R and change it into the data frame format.
+```{r}
+#Data preparation
+library(stringr)
+
+data=readLines("~cr173/Sta523/data/world_cup_goals_raw.txt")
+data.frame=data.frame(data)
+```
+By viewing the data, we find that goal g132 data is missing in the original data set.
+
+####1.2 Transformation\
+
+We parsed the information and separated the individual variable data into the data frame format.
+```{r}
+data0=matrix(NA,193*2,13)
+data0=data.frame(data0)
+
+data0[,1]=unlist(str_match_all(data," id=\"([a-z0-999]*)\""))
+
+data0[,2]=unlist(str_match_all(data," pig=\"([0-99]*)\""))
+
+data0[,3]=unlist(str_match_all(data," class=\"([a-z ]*)\""))
+
+data0[,4]=unlist(str_match_all(data," pid=\"([0-999]*)\""))
+
+data0[,5]=unlist(str_match_all(data," mid=\"([0-999]*)\""))
+
+data0[,6]=unlist(str_match_all(data," pname=\"(.*)\" pteam="))
+
+data0[,7]=unlist(str_match_all(data," pteam=\"(.*)\" ptime="))
+
+data0[,8]=unlist(str_match_all(data," ptime=\"([0-999]*)\""))
+
+data0[,9]=unlist(str_match_all(data," paddtime=\"([0-999]*)\""))
+
+data0[,10]=unlist(str_match_all(data," ptype=\"(.*)\" pteamimg="))
+
+data0[,11]=unlist(str_match_all(data," pteamimg=\"(.*)\" pmatch="))
+
+data0[,12]=unlist(str_match_all(data," pmatch=\"(.*)\" style="))
+
+data0[,13]=unlist(str_match_all(data," style=\"(.*)\"></div"))
+
+data1=matrix(NA,193,13)
+data1=data.frame(data1)
+for(j in 1:13)
+  {
+  for (i in 1:193)
+  {
+   data1[i,j]=data0[i*2,j]
+  }
+  }
+
+#add the column names for data
+colnames(data1)=c("id","pig","class","pid","mid","pname","pteam","ptime","paddtime","ptype","pteaming","pmatch","style")
+
+```
+data1 is the raw data in data frame format.
+
+####1.3 Style separation\
+
+We need to separate the style column data into two variables for further analysis.
+```{r}
+#separate the style
+data0a=matrix(NA,193*2,14)
+data0a=data.frame(data0)
+
+data0a[1:2,13]=unlist(str_match_all(data," style=\"left: (.*)px; top:"))
+
+data0a[3:(2+length(unlist(str_match_all(data," style=\"right: (.*)px; top:")))),13]=unlist(str_match_all(data," style=\"right: (.*)px; top:"))
+
+data0a[,14]=unlist(str_match_all(data," top:(.*)px"))
+
+```
+data0a is just the same as data0 except for the separated style variable.
+
+```{r}
+data1a=matrix(NA,193,14)
+data1a=data.frame(data1a)
+for(j in 1:14)
+  {
+  for (i in 1:193)
+  {
+   data1a[i,j]=data0a[i*2,j]
+  }
+  }
+
+colnames(data1a)=c("id","pig","class","pid","mid","pname","pteam","ptime","paddtime","ptype","pteaming","pmatch","sRight","sTop")
+
+
+data1a[,13:14]=as.numeric(unlist(data1a[,13:14]))
+data1a[1,13]=1000-data1a[1,13]# transform style of the first goal
+
+```
+data1a is data in general data frame format with separated style variable.
+
+###2. Visualization\
+
+####2.1 Preparation\
+
+In this exercise we wish to focus on the Header shots only. These are 30 out of the total 193 goals made in the FIFA tournament. 
+
+As we want to analyze the header goals, we firstly find out the players' height and then calculate out the distance between the player and the goal post in header goal cases. Unfortunately this is not available in the Data set made available by the Professor. However, we took an extra mile and collated the heights of players from the weblink provided in the assignment. This additional data is included in the data frame data3 as the column Height. 
+```{r}
+#Visualization
+#Header
+
+data2=subset(data1a,ptype=="Header")
+data3=subset(data2,select=c("id","pig","pid","pname","pteam","ptime","paddtime","sRight","sTop"))# select the variables we actually need
+
+hit=read.table("height.txt",header = TRUE)#player's height
+data3=cbind(data3,hit)
+
+data3[,c(2,6,7,8,9,10)]=as.numeric(unlist(data3[,c(2,6,7,8,9,10)]))
+
+data3$ptime=data3$ptime+data3$paddtime
+data3=data3[,-7]#combine ptime and paddtime
+
+data3=data.frame(data3)
+
+```
+
+####2.2 Distance analysis\
+
+To visualize how close the headers (goals made by hitting the football with players head) were from the goal post, we calculated the distance between the player locations using the column Style. To make the calculations easier, we have split the data in the Style column into two: sRight and sTop to store the right and top relative locations of the player on the ground. Also we used the pig column of the original data frame to identify the location where the football enters the goal post. The units of these distances are pixels. Using the algebra formula, we calculated the distance for every header shot made and added this as a column to the data frame data3.
+
+```{r}
+
+
+#1 
+#To calculate distance between player location (header) and the goal post where the goal was made
+distance=matrix(NA,30,1)
+distance=data.frame(distance)
+
+  for (i in 1:30)
+  {
+ X = as.numeric(data3[i,7]) # col8 has Right pixel values
+ Y = 550- as.numeric(data3[i,2])
+ a = as.numeric(data3[i,8]) # col9 has Top pixel values
+ V = ((X-Y)^2 + (a)^2)
+ distance[i,1] = as.numeric(sqrt(V))  
+}
+
+data3=cbind(data3,distance) 
+
+d <- density(data3$distance)
+plot(d, main="Distribution of Headers over Distance of Player from Goal Post", xlab="Distance (in pixels)", xaxt="n")
+polygon(d, col="light blue", border="dark blue") 
+xticks <- seq(0, 200, 25)
+axis(1, at = xticks, labels = xticks, col.axis="blue", las=2, tck=-.01)
+abline(v=seq(0, 200, 25), lty=2)
+
+```
+
+The density plot of the distance data gave us insights into the ideal distance from which a player is more likely to make a header shot. From the visualization #1, we can see that 75 to 100 pixels is the range ideal to make a header shot.
+
+
+####2.3 Shooting place analysis\
+
+To create a visualization of all the headers on a soccer field in comparison to other types of goals. Since we already have the subset data3 for all the headers, we created another dataset, data3a, to store all the values for other types of goals. Then, we plotted each goal's right position against its top position(in pixels), using yellow dots to represent headers and red dots to represent other types of goals. To visualize the soccer field, we drew a green field with the rect function, the goal post, penalty area and goal area with the segments function. We also created a legend for the plot to make everything more clear.Through the visualization, it's very obvious that the headers are more concentrated in the goal area and closer to the goal post, compared to other types of goals.
+
+```{r}
+#2 Visualization of all the headers on a soccer field
+data3a=subset(data1a,ptype!="Header")
+plot(data3$sRight, data3$sTop, xlim=c(1000,0), ylim=c(500,0),xlab="",ylab="",axes=FALSE)
+u=par("usr")
+rect(u[1],u[3],u[2],u[4],border=139,col=139)
+points(data3a$sRight, data3a$sTop, pch=19, col="red")
+points(data3$sRight, data3$sTop, pch=19, col="yellow")
+segments(800,250,200,250,col="white",lwd=3)
+segments(800,250,800,-20,col="white",lwd=3)
+segments(200,250,200,-20,col="white",lwd=3)
+segments(650,100,350,100,col="white",lwd=3)
+segments(650,100,650,-20,col="white",lwd=3)
+segments(350,100,350,-20,col="white",lwd=3)
+segments(550,-18,450,-18,col="white",lwd=8)
+legend(1000,350, c("Headers", "Other Types"), col=c("yellow","red"), pch=c(19,19), box.col="white", cex=0.8)
+
+```
+
+We want to create a histogram to show players' favorite goal post area for headers. If we look at the pig column for the all the goals, we can find that for numbers around 5, the ball entered the left side of the goal post; for numbers around 49, the ball entered the center of the goal post; for numbers around 92, the ball entered the goal post from the right side. So our histogram has three bars representing left, center and right. From the visualization, we can conclude that the players are more likely to make a header shot if he aims for the right or left side of the goal post.  
+
+```{r}
+hist(data3$pig, col="light blue", main="Favorite Goal Post Area for Headers",
+     xlab="Goal Post Area", ylab="Number of Goals", breaks=4, axes=FALSE)
+xticks=seq(0,100,by=100/2)
+xlabels=c("Left", "Center", "Right")
+axis(1, at=xticks, labels=xlabels)
+```
+
+
+####2.4 Distance and player's height relationship\
+
+We opined that it will be compelling to see if at all there is a relationship between the header shot distance from the goal post and the player’s height. To visualize this observation, we need player's height. Unfortunately this is not available in the Data set made available by the Professor. However, we took an extra mile and collated the heights of players from the weblink provided in the assignment. This additional data is included in the data frame data3 as the column Height.
+
+```{r}
+#3
+plot(data3$height,data3$distance, main="Distribution of Headers over \n 1)Player height and 2)Distance from Goal Post", xlab="Player Height (in cms)", ylab="Distance from Goal Post (in pixels)", pch=20, col="brown", bg=1, xaxt="n")
+abline(h=c(50,150), lty=2, col="blue")
+abline(v=c(178,190), lty=5, col="red")
+xticks <- seq(175, 195, 1)
+axis(1, at = xticks, labels = xticks, las=2)
+rect(178, 50, 190, 150, density = NULL, angle = 45, col = '#00CD6640', border = NULL)
+
+```
+
+The plot with height (in cms) on X-axis and player's distance from goal post (in pixels) helped us note that the likelihood of making a header shot is high when player's height is between 178 and 190 cms and player's distance is between 50 and 150 cms away from the goal post.
+
+
+####2.5 Goal time analysis\
+
+According to the FIFA rules and regulations, the football match usually lasts two equal periods of 45 minutes, unless otherwise mutually agreed between the referee and the two teams. Our team wanted to visualize the time slot during which players across all the matches tend to make header shots. For this we plotted density graph using the data frame data3 column ptime (in minutes).
+
+```{r}
+#4
+d2 <- density(data3$ptime)
+plot(d2, main="Distribution of Headers over time (Ideally Two 45 mins slots)", xlab="Match Time (in minutes)", xaxt="n")
+polygon(d2, col="light blue", border="dark blue") 
+abline(v=c(22.5, 45, 67.5, 90, 112.5), lty=2)
+xticks <- seq(0, 112.5, 22.5)
+axis(1, at = xticks, labels = xticks, col.axis="blue", las=2, tck=-.01)
+
+```
+
+The plot generated gave us an interesting perception of the timing strategy employed by the players. From the visualization#4, we can observe that players are more inclined to make header shot in the first half of the second 45 minutes period than in any other slot.
+
+
+###3. Translation\
+
+####3.1 Transform to JSON\
+
+To make our data frame easy to read and understand, we would like to translate our data frame into the JSON format, a popular data frame structure. In order to create a well-formatted JSON, we would like to group the data into different levels: the first level could be grouped by different countries, the second level could be grouped by different players, and the third level could be grouped by different goals, marked by goals' id, and then the last level we want to show the corresponding information of that goal. So we can know for each country, which players had goals and how many goals they each have, what is the goal id of each goal for that player, what is the specific goal information corresponding to that goal id, including match id,goal class, goal type, goal place, shooting place (right and top), time, addtime, and player id. In this way, other data users can see the information by goal id, players, and countries, which should be more explicit. Our task is to make the data tree structured as what we want, either in the orders or in the levels. Then translate the data into valid JSON format.
+
+```{r}
+#To Json Format
+
+data4=data1[order(data1$pteam,data1$pname,data1$id),]#Order the data by rows so it can be ordered by the value of pteam, and then pname, and then id, and so the data is logical now.  
+
+library(rjson)
+library(jsonlite)
+library(RJSONIO)
+
+
+data5=subset(data4,select=c("pteam","pname","id","mid","class","ptype","pig","style","ptime","paddtime","pid"))#Order the data by colums so the first colum is pteam, the second is pname, and so on so forth. This is to make pteam the 1st level in the tree struture, and pname the 2nd, and so on so forth. Besides, we only need 12 variables to present in JSON, since "pmatch" is identical to "mid", and "pteaming" is picture.
+
+colnames(data5)=c("Country","player_name","goal_id","match_id","goal_class","goal_type","goal_place","shooting_place","time","addtime","player_id")#Give each colum a new name to make it understandable.
+attach(data5)
+level1=split(subset(data5,select=c(-Country)),Country)#Split the data to get the first level in the tree structure, which is "Country". We group the data by Country.
+level2=lapply(level1,function(x){split(subset(x,select=c(-player_name)),x$player_name,drop=TRUE)})#Split the subdata under different Country groups to get the second level in the tree structure, which is "player_name". We group the subdata by player name.
+level3=lapply(level2,function(x){lapply(x,function(y){split(subset(y,select=c(-goal_id)),y$goal_id,drop=TRUE)})})#Split the subdata under different player name groups to get the third level in the tree struture, which is "goal_id". We group the subdata by goal id.
+
+World_Cup_Goals=toJSON(list(World_Cup_Goals=level3))#Translate the data into JSON and give it a name as "World_Cup_Goals".
+prettify(World_Cup_Goals)#See the JSON output.
+
+
+```
+
