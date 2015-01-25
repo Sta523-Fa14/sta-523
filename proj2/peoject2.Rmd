@@ -1,5 +1,5 @@
 ---
-title: "HW2"
+title: "project2"
 output: html_document
 ---
 

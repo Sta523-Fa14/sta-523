@@ -1,7 +1,7 @@
 # This Makefile is used to generate the final document
 
-HW2.html: HW2.Rmd LaQuinta/Inns_Pages/La_Quinta_Inns_Data.Rdata dennys/dennys_data.Rdata
-	Rscript -e "library(rmarkdown);render('HW2.Rmd')"
+project2.html: project2.Rmd LaQuinta/Inns_Pages/La_Quinta_Inns_Data.Rdata dennys/dennys_data.Rdata
+	Rscript -e "library(rmarkdown);render('project2.Rmd')"
 
 
 # La Quinta files
@@ -28,4 +28,4 @@ dennys/%.html: Dennys_Download.R
 clean:
 	rm -rf dennys/
 	rm -rf LaQuinta/
-	rm -f hw2.html
+	rm -f project2.html

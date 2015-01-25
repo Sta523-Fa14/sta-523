@@ -1,0 +1,17 @@
+---
+title: "Write up for Project 3"
+output: html_document
+---
+###Task 1 - Geocoding
+
+We need to clean the big data set. First, we eliminate the space in column names to satisfy the package requirement; then we change the format of Issue.Date in orer to select the data between the stipulated date period. We use filter function to catch all the addresses we need, with the criteria that Violation.Precinct should be between 1 and 34, and that Issue.Date should be between 8/1/2013 and 6/30/2014. Then we catch the address data in the data set which contains the longitue and latitude, and merge the two address data sets after we rename some notations in house numbers and street names to make them consistent. Since the data size is too large and we don't need so much data, we subset the data randomly.
+
+###Task 2 - Recreating NYC’s Police Precincts
+
+After combining the geocoded locations from Task 1 with Violation.Precinct from the violations data set, we tried to come up with a method to create a set of spatial polygons to represent boundaries of each precinct. The first thing we tried is to obtain the vertices of each precinct by finding the points with maximum and minimum longitude and latitude, then draw polygons using the rgdal package. However, the plot turned out to be extremely messy. To find out the reason, we plotted all the violation data points on the map of Manhattan using different colors for different precincts, and saw that a lot of the points appeared in precincts that they don't belong to, which means there are many outliers in the data set.
+
+After the first attempt failed, we tried using the gConvexHull function in the rgeos package. This time, we were able to see multiple polygons representing each precinct, but the boundaries are far from real ones. So we figured may be it would be a good idea to get rid of some outliers first.
+
+We attempted to avoid outliers from the sub dataset, which we randomly considered. The approach is to identify the centroid of all the violation addresses in a precinct and calculate the distances between that centroid and the individual addresses. To ignore the outliers, we considered only the distances that fall below the 85 percent mark of the maximum distance case of each precinct. A new package sqldf was deployed to find the averages, apply group by functions and leverage inner query concepts of SQL.
+
+While some team members worked on cleaning the outliers, others worked on implementing the svm function to create boundaries. After running it on the small parking data set with the outliers, the results improved significantly. We were able to see clear boundaries of 21 precincts (except for central park due to lack of data), and they were very close to the actual ones. Then we ran it again on the same data set without the outliers, the results actually became worse. In addtion, the function seems to work better on smaller data set than bigger one. So We decided to keep the small data for the task.

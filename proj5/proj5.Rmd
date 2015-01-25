@@ -1,0 +1,415 @@
+---
+title: "Project 5"
+output: html_document
+---
+
+#####This document has 3 parts. The first part is coding for this homework; the second part is table output; the third part is write up for this homework.
+
+##Coding
+```{r}
+source("check_packages.R")
+check_packages(c("doMC","truncnorm","parallel","xtable"))
+#Distributions
+dbetann = function(x)
+{
+  dbeta(x,0.9,0.9)
+}
+dtnorm = function(x)
+{
+  ifelse(x < -3 | x > 3, 0, dnorm(x)/0.9973002)
+}
+dtexp = function(x)
+{
+  ifelse(x < 0 | x > 6, 0, dexp(x, rate=1/3)/0.8646647)
+}
+dunif_mix = function(x)
+{
+  ifelse(x >= -3 & x < -1, 0.6*dunif(x,-3,-1),
+  ifelse(x >= -1 & x <  1, 0.1*dunif(x,-1, 1),
+  ifelse(x >=  1 & x <  4, 0.3*dunif(x, 1, 4), 
+  0)))
+}
+dtnorm_mix1 = function(x)
+{
+  ifelse(x < 0 | x > 10, 
+         0, 
+         ( 0.5*dnorm(x,mean=2,sd=2)
+          +0.5*dnorm(x,mean=6,sd=1))/0.9206407)
+}
+dtnorm_mix2 = function(x)
+{
+  ifelse(x < -4 | x > 4, 
+         0, 
+         ( 0.45*dnorm(x,mean=-4)
+          +0.45*dnorm(x,mean= 4)
+          +0.1 *dnorm(x,mean= 0,sd=0.5))/0.55)
+}
+#Sampler Error / Scoring
+score = function(x, dfunc) 
+{
+  stopifnot(is.numeric(x) & length(x))
+  
+  x = sort(x)
+  n = length(x)
+
+  ex = ecdf(x)(x)
+
+  dx = dfunc(x)
+  ed = cumsum(c(0, (x[-1]-x[-n])*(dx[-1]+dx[-n])/2))
+  
+  return( sqrt(sum((ex-ed)^2)/n) )
+}
+
+#Sampler
+reject = function(n, dfunc, range, mc=FALSE)
+  {
+   if (n <= 100) { NumCores = 2 
+    } else if (n <= 10000) { NumCores = 4 
+    } else if (n <= 1000000) { NumCores = 5 
+    } else{ NumCores = 8 }
+      
+    reject_small = function(m,dfunc,range)
+    {
+      e=0.000001
+      range=c(range[1]+e,range[2]-e)
+      p=seq(range[1],range[2],by=0.00001)
+      M=(max(dfunc(p))+e)*(range[2]-range[1])
+      x=runif(n,range[1],range[2])
+      x[1]=mean(range)
+      density.ratio=dfunc(x)/(M*dunif(x,range[1],range[2])) 
+      runif=runif(m)- density.ratio 
+      for ( i in 2:m ) {
+        if (runif[i]>=0) {x[i]=x[i-1]}
+      }
+      return(x)
+    }
+     
+     if(mc==TRUE){
+       #assume input mc would be number of core
+       return(unlist(mclapply(1:NumCores, function(x) reject_small(n/NumCores, dfunc, range), mc.cores = NumCores))) 
+     }else{
+       return(reject_small(n,dfunc,range))
+     }
+  }
+
+
+mh = function(n, dfunc, range, mc=FALSE)
+{
+  if (n <= 100) { NumCores = 2 
+  } else if (n <= 10000) { NumCores = 4 
+  } else if (n <= 1000000) { NumCores = 5 
+  } else{ NumCores = 8 }
+  
+  samples=function(n,dfunc,min,max,sd){
+    y=rep(NA,n)
+    y[1]=(min+max)/2
+    #sample from the distribution using the tuned parameter
+    for (i in 2:n){
+      y.prop=rnorm(1,y[i-1],sd)
+      if (y.prop>min & y.prop<max){
+       ratio=dfunc(y.prop)/dfunc(y[i-1])
+        u=runif(1)
+        if (u<ratio){
+         y[i]=y.prop
+        }else{
+         y[i]=y[i-1]
+        }
+      } else {
+        y[i]=y[i-1]
+      }
+    }
+    return(y)
+  }
+  
+  library(parallel)
+  min=min(range)
+  max=max(range)
+  #a set of candidates for sd
+  sd=seq(from=0.2,to=1,by=0.1)
+  error=rep(NA,length(sd))
+  for (i in 1:length(sd)){
+    #tuning the parameter using a sample size of 500
+    y=samples(500,dfunc,min,max,sd[i])
+    error[i]=score(y,dfunc)
+  }
+  #finding the best sd based on minimum error
+  best.sd=sd[which.min(error)]
+  if (mc==FALSE){
+    return(samples(n,dfunc,min,max,best.sd))
+  } else {
+    return(unlist(mclapply(1:NumCores,function(x)samples(n/NumCores,dfunc,min,max,best.sd),mc.cores=NumCores)))
+  } 
+}
+
+slice = function(n, dfunc, range, mc=FALSE){
+  library(doMC)
+  stopifnot(is.function(dfunc))
+  stopifnot(length(range)==2)
+  
+  if (n <= 100) { NumCores = 2 
+  } else if (n <= 10000) { NumCores = 4 
+  } else if (n <= 1000000) { NumCores = 5 
+  } else{ NumCores = 8 }
+  
+  slice_small=function(m,dfunc,range){
+    
+    smpl=matrix(NA,nrow=m,ncol=1)
+    
+    #Step 1 Starting Value
+    ub=max(range)
+    lb=min(range)
+    smpl[1]=runif(1,min = lb, max = ub)
+    
+    #Tuning parameter
+    w=0.05
+    z = seq(lb,ub,w)
+    #slice sample
+    for(i in 2:m){
+      #step 2 Sample a y value uniformly between 0 and f(x_i-1)
+      y=runif(1,0,dfunc(smpl[i-1]))
+      
+      #Stpe 3 Draw a horizontal line across the curve at this y position
+      #Find the approximate solution of dfunc()=y
+      dz = dfunc(z) - y
+      
+      flag = (dz>0)*2-1
+      flag_2 = c(flag[1],flag[-length(flag)])
+      flag_3 = flag * flag_2
+      intvl_temp = z[flag_3 == -1]
+      n_temp = length(intvl_temp)
+      if(n_temp==0){
+        #Two extreme case
+        smpl[i]=runif(1,min = lb, max = ub)
+      }else{
+        if(dz[1]>0){
+          if(n_temp %% 2 == 0){
+            intvl = matrix(NA,nrow = (n_temp/2+1), ncol = 2)
+            intvl_temp = c(lb,intvl_temp,ub)
+            for(j in 1:(n_temp/2+1)){
+              intvl[j,1] = intvl_temp[2*j-1]-ifelse(j>1,w,0)
+              intvl[j,2] = intvl_temp[2*j]
+            }
+          }else{
+            intvl = matrix(NA,nrow = (n_temp+1)/2, ncol = 2)
+            intvl_temp = c(lb,intvl_temp)
+            for(j in 1:((n_temp+1)/2)){
+              intvl[j,1] = intvl_temp[2*j-1]-ifelse(j>1,w,0)
+              intvl[j,2] = intvl_temp[2*j]
+            }
+          }
+        }else{
+          if(n_temp %% 2 == 0){
+            intvl = matrix(NA,nrow = (n_temp/2), ncol = 2)
+            for(j in 1:(n_temp/2)){
+              intvl[j,1] = intvl_temp[2*j-1]-w
+              intvl[j,2] = intvl_temp[2*j]
+            }
+          }else{
+            intvl = matrix(NA,nrow = (n_temp+1)/2, ncol = 2)
+            intvl_temp = c(intvl_temp,ub)
+            for(j in 1:((n_temp+1)/2)){
+              intvl[j,1] = intvl_temp[2*j-1]-w
+              intvl[j,2] = intvl_temp[2*j]
+            }
+          }
+        }
+        #Step 3 Sample a point (x,y) from the line segments within the curve
+        b = sum(intvl[,2]-intvl[,1])
+        repeat{
+          x_next = runif(1,min = 0, max = b)
+          for(k in 1:nrow(intvl)){
+            if(intvl[k,2]>=x_next+intvl[k,1]){
+              smpl[i]=x_next+intvl[k,1]
+              break
+            }else{
+              x_next = x_next - (intvl[k,2] - intvl[k,1])
+            }
+          }
+          if(dfunc(smpl[i])>y){break}
+        }
+      }
+    }
+    
+    return(smpl)
+  }
+  
+  if(mc==TRUE){
+    return(unlist(mclapply(1:NumCores, function(x) slice_small(n/NumCores, dfunc, range), mc.cores = NumCores))) 
+  }else{
+    return(slice_small(n,dfunc,range))
+  }
+  
+}
+
+R = function(n, dfunc, range, mc=FALSE)
+{
+  library(truncnorm)
+  
+  if (n <= 100) { NumCores = 2 
+  } else if (n <= 10000) { NumCores = 4 
+  } else if (n <= 1000000) { NumCores = 5
+  } else { NumCores = 8 } 
+  
+  rexp_custom = function(n_divided_set)
+  {
+    y=NULL
+    repeat
+    {
+      n_temp=n_divided_set-length(y)
+      z=rexp(n_temp,1/3)
+      y=c(z[z<6],y)
+      if(length(y)>=n_divided_set)
+      {break}
+    }
+    return (y)
+  }
+  
+  #if(substitute(dfunc) == "dbetann")
+  if(identical(dfunc,dbetann))
+  { 
+    if(mc == FALSE)
+      x <- rbeta(n,0.9,0.9)
+    else
+      x <- unlist(mclapply(1:NumCores, function(x) rbeta(n/NumCores,0.9,0.9), mc.cores = NumCores))
+    
+  }  else if (identical(dfunc,dtnorm))   {
+    if(mc == FALSE)
+      x <- rtruncnorm(n,-3,3,0,1)    
+    else
+      x <- unlist(mclapply(1:NumCores, function(x) rtruncnorm(n/NumCores,-3,3,0,1), mc.cores = NumCores))
+  }  else if (identical(dfunc,dtexp))    {
+    if(mc == FALSE)
+    {
+      y=NULL
+      repeat
+      {
+        n_temp=n-length(y)
+        z=rexp(n_temp,1/3)
+        y=c(z[z<6],y)
+        if(length(y)>=n)
+        {break}
+      }
+      x <- y 
+    }		      
+    else
+      x <- unlist(mclapply(1:NumCores, function(p) rexp_custom(round(n/NumCores)), mc.cores = NumCores))
+  }  else if (identical(dfunc,dunif_mix)) {
+    if(mc == FALSE)
+      x <- c(runif(0.6*n,-3,-1),runif(0.1*n,-1, 1),runif(0.3*n, 1, 4))
+    else
+      x <- unlist(mclapply(1:NumCores, function(x) c(runif(0.6*n/NumCores,-3,-1),runif(0.1*n/NumCores,-1, 1),runif(0.3*n/NumCores, 1, 4)), mc.cores = NumCores))
+  }  else if (identical(dfunc,dtnorm_mix1)) {
+    if(mc == FALSE)
+      x <- c((rtruncnorm(0.5*n,0,10,2,2)),(rtruncnorm(0.5*n,0,10,6,1)))
+    else
+      x <- unlist(mclapply(1:NumCores, function(x) c((rtruncnorm(0.5*n/NumCores,0,10,2,2)),(rtruncnorm(0.5*n/NumCores,0,10,6,1))), mc.cores = NumCores))
+  }  else if (identical(dfunc,dtnorm_mix2)) {
+    if(mc == FALSE)
+      x <- c((rtruncnorm(0.45*n,-4,4,-4,1)),(rtruncnorm(0.45*n,-4,4,4,1)),(rtruncnorm(0.1*n,-4,4,0,0.5)))
+    else
+      x <- unlist(mclapply(1:NumCores, function(x) c((rtruncnorm(0.45*n/NumCores,-4,4,-4,1)),(rtruncnorm(0.45*n/NumCores,-4,4,4,1)),(rtruncnorm(0.1*n/NumCores,-4,4,0,0.5))), mc.cores = NumCores))
+  }  else { 
+    cat("Invalid dfunc value") 
+  }
+}
+```
+
+##Table Output
+```{r}
+#table
+library(xtable)
+sc.time=matrix(NA,ncol=4,nrow=24)
+mc.time=matrix(NA,ncol=4,nrow=24)
+sc.score=matrix(NA,ncol=1,nrow=24)
+mc.score=matrix(NA,ncol=1,nrow=24)
+mc=c(FALSE,TRUE)
+n=c(100,10000,1000000,10000000)
+dfunc=list("dbetann"=dbetann,"dtnorm"=dtnorm,"dtexp"=dtexp,"dunif_mix"=dunif_mix,"dtnorm_mix1"=dtnorm_mix1,"dtnorm_mix2"=dtnorm_mix2)
+range=c(0,1,-3,3,0,6,-3,4,0,10,-4,4)
+
+for (i in 1:4)
+{
+  for (j in 0:5)
+  {
+    sc.time[1+4*j,i]=n[i]/system.time(reject(n[i],dfunc[[j+1]],c(range[1+2*j],range[2+2*j]),mc=mc[1]))[3]
+    sc.time[2+4*j,i]=n[i]/system.time(mh(n[i],dfunc[[j+1]],c(range[1+2*j],range[2+2*j]),mc=mc[1]))[3]
+    sc.time[3+4*j,i]=n[i]/system.time(slice(n[i],dfunc[[j+1]],c(range[1+2*j],range[2+2*j]),mc=mc[1]))[3]
+    sc.time[4+4*j,i]=n[i]/system.time(R(n[i],dfunc[[j+1]],c(range[1+2*j],range[2+2*j]),mc=mc[1]))[3]
+  }
+}  
+
+for (i in 1:4)
+{
+  for (j in 0:5)
+  {
+    mc.time[1+4*j,i]=n[i]/system.time(reject(n[i],dfunc[[j+1]],c(range[1+2*j],range[2+2*j]),mc=mc[2]))[3]
+    mc.time[2+4*j,i]=n[i]/system.time(mh(n[i],dfunc[[j+1]],c(range[1+2*j],range[2+2*j]),mc=mc[2]))[3]
+    mc.time[3+4*j,i]=n[i]/system.time(slice(n[i],dfunc[[j+1]],c(range[1+2*j],range[2+2*j]),mc=mc[2]))[3]
+    mc.time[4+4*j,i]=n[i]/system.time(R(n[i],dfunc[[j+1]],c(range[1+2*j],range[2+2*j]),mc=mc[2]))[3]
+  }
+} 
+
+for (i in 0:5)
+{
+  sc.score[1+4*i]=score(reject(n[3],dfunc[[i+1]],c(range[1+2*i],range[2+2*i]),mc=mc[1]),dfunc[[i+1]])
+  sc.score[2+4*i]=score(mh(n[3],dfunc[[i+1]],c(range[1+2*i],range[2+2*i]),mc=mc[1]),dfunc[[i+1]])
+  sc.score[3+4*i]=score(slice(n[3],dfunc[[i+1]],c(range[1+2*i],range[2+2*i]),mc=mc[1]),dfunc[[i+1]])
+  sc.score[4+4*i]=score(R(n[3],dfunc[[i+1]],c(range[1+2*i],range[2+2*i]),mc=mc[1]),dfunc[[i+1]])
+}
+
+for (i in 0:5)
+{
+  mc.score[1+4*i]=score(reject(n[3],dfunc[[i+1]],c(range[1+2*i],range[2+2*i]),mc=mc[2]),dfunc[[i+1]])
+  mc.score[2+4*i]=score(mh(n[3],dfunc[[i+1]],c(range[1+2*i],range[2+2*i]),mc=mc[2]),dfunc[[i+1]])
+  mc.score[3+4*i]=score(slice(n[3],dfunc[[i+1]],c(range[1+2*i],range[2+2*i]),mc=mc[2]),dfunc[[i+1]])
+  mc.score[4+4*i]=score(R(n[3],dfunc[[i+1]],c(range[1+2*i],range[2+2*i]),mc=mc[2]),dfunc[[i+1]])
+}
+
+
+density=c(rep("dbetann",4),rep("dtnorm",4),rep("dtexp",4),rep("dunif_mix",4),rep("dtnorm_mix1",4),rep("dtnorm_mix2",4))
+sampler=rep(c("reject","MH","slice","R"),6)
+sctime=round(sc.time,4)
+mctime=round(mc.time,4)
+scscore=round(sc.score,4)
+mcscore=round(sc.score,4)
+table=as.data.frame(cbind(density,sampler,sctime,mctime,scscore,mcscore))
+colnames(table)=c("dfunc","sampler","SC 100 sample/sec timing","SC 10,000 sample/sec timing", "SC 1,000,000 sample/sec timing", "SC 10,000,000 sample/sec timing", "MC 100 sample/sec timing","MC 10,000 sample/sec timing", "MC 1,000,000 sample/sec timing", "MC 10,000,000 sample/sec timing","SC Score", "MC Score")
+```
+
+<table border = 2>
+  <tr>
+  <td>
+```{r results='asis', echo=FALSE}
+print(xtable(table),type="html")
+```
+</td>
+  
+  </tr>
+  </table>
+ 
+
+##Write Up 
+ 
+####Rejection Sampler:
+Let "e" equals to a extremely small value and shorten the "range" given in function inputs by subtract "e" from both the ends of "range". In doing this, the range is almost the same with original inputs, while the problem that "dbetann" goes to infinity at the ends of "range" can be fixed. Let "p" equals to a sequence of numbers generated within the "range", and here I use "by=0.00001" instead of "length=9999", which is to make sure that no matter how long the "range", I can get enough numbers. "M" is used to make sure that the proposal density (here it's uniform density) is the envelope density, that the proposal density should be higher than the input density. We generate random samples "x" from our proposal density within the "range", and let the first value in "x" equals to a number within the "range". We calculate the ratio that density of "x" in input density to density of "x" in proposal density (with "M"" multiplied), and if the density ratio is larger than a random value from unfirom (0, 1), then we keep this corresponding "x" as our accepted sample, while if the density ratio is equal to or smaller than a random value from unfirom (0, 1), we give away this corresponding "x" and use the accepted "x" value before that corresponding "x" instead. Then we can genetarate samples "x" with a number of input "n". At the first, I used "for loop" for this rejecting/accepting process, and it turns out that the system time is pretty long. So I instead use "x", "density.ratio" and "runif" to record all the values in one time, then use "for loop" for selecting values for "x". In this way, the system time is shortened very well.
+
+
+####MH Sampler:
+When implementing the Metropolis-Hastings sampler, the first thing we do is to get the minimum and maximum values of the range so we know where to sample from.
+Since most of these distributions have a fixed range, at first we use the truncated normal distribution as our proposal function. In order to so, we have to use an R package called "truncnorm" and adjust the acceptance ratio because truncated normal is not symmetric. Later, it turns out that this significantly slows down our sampler. So we decide to use the classic "normal random walk" and throw out anything that is outside of the given range. This way, we can avoid using an additional package. The next thing we do is to create another helper function that generates all the samples we need using the Metropolis-Hastings algorithm. After that, we need to tune the standard deviation that is used for the normal proposal density to get a more accurate sampler. After a few trials, it seems that (0,1) will be a good range for the standard deviation, so we generate a set of candidates within this range, use each of them to generate a sample, and use the score function to calculate their scores. The candidate with the score closest to 0 will be our best parameter, and used for the actual sampling. The last part is to decide how many cores to use for our sampler when mc==TRUE. Here, we implement the "parallel" package that is introduced in class. Knowing that more cores doesn't necessarily perform better, we set the number of cores to 4 when the sample size is smaller than 100000 and set the number of cores to 8 when the sample size is larger than 100000.
+
+
+####Slice Sampler:
+In the slice sampler, the most important part is how to sample uniformly within the line segments within the curve. Firstly, I creat a sequence from the lower bound of the range to the upper bound of range with 0.01 step width and then calculate the density function value for the sequence. 
+Each iteration, after I get y sampled uniformly between 0 and density function value of last sample point, I would  create a logical value vector which it is true if the density function value of the sequence is larger than y otherwise it is false. After that I create a vector by taking this logical value vector times 2 minus 1 so that it changes to 1 if it is true and changes to -1 if it is false. I shift this vector by copy the first value of the vector, add it on the top of the vector and remove the last value of the vector. Thus, after multipling the origin vector and shifted vector I can get all x which dfunc(x) is nearly the same as y. And then if the density function value of lower bound of range or upper bound of range is positive I combine it with the x I select in last step. Therefore, I have the start position and end position of the line segments within the curve and I can sample a new point uniformly within these line segments within the curve. Repeat until we get enough sample.
+At first, I make a mistake, when I sample within the line segments within the curve. As to the second normal mixture density function, there will be more than one line segment when sampling new point and they are not continuous. I combined these line segments together to sample new point uniformly and then turned it back to the accurate position. However, when I am finding the accurate position of new sample point, I forgot to break the for loop which means the new sample point is always in the last line segments. After I fixed this problem, I improve the sampler a lot.
+
+
+####R Sampler:
+To implement R sampler for the given six distributions, we relied on built in R functions such as rbeta, rtruncnorm, rexp, runif. To use rtruncnorm function, we included the library truncnorm. Please note that the parameter range doesn't have significance while calling the function R. Because for this assignment, we need the sample sizes to be one among these values: 100, 10000, 1000000, and 10000000, we have strictly limited the input considerations for n. Any other n value will throw an error message - Invalid n value. We made the number of cores directly proportional to the n value. 
+For the multi core case of the truncated exponential distribution, we thought it will be easy to capsule the logic in a function and use mcapply on that function. The function named thus created is rexp_custom. It is placed within the R sampler function code. 
+
+
+####Table: 
+We use package "xtable" here. First we seperate the table into 4 segments, with the 1st being the single core time, the 2nd being multi core time, the 3rd being single core score, and the 4th being multi core score. For the single core time, "i" stands for 4 colums for different sample size and "j" stands for 6 densities. Using a for loop with just 4 lines of code, we can get a 24*4 matrix which records the single core times. And for the multi core time we use the same method. We use the "elapsed" time for both single core time and multi core time. For single core score, "i" stands for 6 densities, and still we use a for loop with 4 lines of code to get the matrix recording single core score. For multi core score, the method is the same. Then we bind these segments into a data frame, and use print(xtable) function to generate the table output. Note that here the single core time and multi core time are sample/sec, that is sample size per second (system time).
+  
